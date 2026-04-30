@@ -21,12 +21,12 @@ use crate::{
     DeviceControl, PayloadStream, StreamError, StreamResult,
 };
 
-pub trait StreamSocket: Send + Sync + 'static {
+pub trait StreamUdpSocket: Send + Sync + 'static {
     fn recv(&self, buf: &mut [u8]) -> io::Result<usize>;
     fn port(&self) -> u16;
 }
 
-impl StreamSocket for UdpSocket {
+impl StreamUdpSocket for UdpSocket {
     fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         self.recv(buf)
     }
@@ -42,13 +42,13 @@ pub struct StreamParams {
     pub host_port: u16,
 }
 
-pub struct StreamHandle<S: StreamSocket = UdpSocket> {
+pub struct StreamHandle<S: StreamUdpSocket = UdpSocket> {
     completion: Option<Arc<(Mutex<bool>, Condvar)>>,
     cancellation_tx: Option<oneshot::Sender<()>>,
     sock: Arc<S>,
 }
 
-impl<S: StreamSocket> StreamHandle<S> {
+impl<S: StreamUdpSocket> StreamHandle<S> {
     pub fn new(sock: S) -> StreamResult<Self> {
         Ok(Self {
             completion: None,
@@ -62,7 +62,7 @@ impl<S: StreamSocket> StreamHandle<S> {
     }
 }
 
-impl<S: StreamSocket> PayloadStream for StreamHandle<S> {
+impl<S: StreamUdpSocket> PayloadStream for StreamHandle<S> {
     fn open(&mut self) -> StreamResult<()> {
         // TODO:
         Ok(())
@@ -135,7 +135,7 @@ impl<S: StreamSocket> PayloadStream for StreamHandle<S> {
     }
 }
 
-struct StreamingLoop<S: StreamSocket> {
+struct StreamingLoop<S: StreamUdpSocket> {
     buffer: Vec<u8>,
     cancellation_rx: oneshot::Receiver<()>,
     completion: Arc<(Mutex<bool>, Condvar)>,
@@ -143,7 +143,7 @@ struct StreamingLoop<S: StreamSocket> {
     sender: PayloadSender,
 }
 
-impl<S: StreamSocket> StreamingLoop<S> {
+impl<S: StreamUdpSocket> StreamingLoop<S> {
     fn run(mut self) {
         macro_rules! unwrap_or_continue {
             ($expr:expr) => {
