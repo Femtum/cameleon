@@ -285,6 +285,7 @@ impl From<std::io::Error> for StreamError {
     }
 }
 
+#[allow(dead_code)]
 #[cfg(test)]
 mod tests {
     use super::*;
