@@ -566,8 +566,9 @@ impl XmlFileLocation {
             .map_err(|_| invalid_url())?;
         let size = u64::from_str_radix(xml_info.next().ok_or_else(invalid_url)?, 16)
             .map_err(|_| invalid_url())?;
-        let compression_type =
-            CompressionType::from_extension(file_name.split('.').last().ok_or_else(invalid_url)?)?;
+        let compression_type = CompressionType::from_extension(
+            file_name.split('.').next_back().ok_or_else(invalid_url)?,
+        )?;
 
         Ok(Self::Device {
             file_name: file_name.to_string(),
@@ -584,10 +585,10 @@ impl XmlFileLocation {
         let extension = url
             .path()
             .split('/')
-            .last()
+            .next_back()
             .ok_or_else(invalid_url)?
             .split('.')
-            .last()
+            .next_back()
             .ok_or_else(invalid_url)?;
         let compression_type = CompressionType::from_extension(extension)?;
 

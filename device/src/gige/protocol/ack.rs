@@ -233,7 +233,7 @@ impl<'a> ReadReg<'a> {
         self.entry_num
     }
 
-    pub fn iter(&self) -> ReadRegIter {
+    pub fn iter(&self) -> ReadRegIter<'_> {
         ReadRegIter {
             entry_num: self.entry_num,
             current_entry: 0,
@@ -255,7 +255,7 @@ impl<'a> ParseAckData<'a> for ReadReg<'a> {
         }
 
         let length = header.length;
-        if length % 4 != 0 {
+        if !length.is_multiple_of(4) {
             return Err(Error::InvalidPacket(
                 ("data of `ReadReg` ack must be a multiple of 4").into(),
             ));

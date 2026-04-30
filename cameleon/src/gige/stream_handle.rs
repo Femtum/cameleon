@@ -91,7 +91,7 @@ impl PayloadStream for StreamHandle {
 
     fn stop_streaming_loop(&mut self) -> StreamResult<()> {
         if let Some(cancel) = self.cancellation_tx.take() {
-            if let Err(_) = cancel.send(()) {
+            if cancel.send(()).is_err() {
                 return Err(StreamError::Disconnected);
             }
             match self.completion.take().as_ref().map(Borrow::borrow) {
