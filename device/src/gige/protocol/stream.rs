@@ -36,7 +36,7 @@ impl PacketHeader {
                 StreamFlag(bid_sflag),
             )
         } else {
-            (bid_sflag as u64, ei_ptype_pid & 0xffff_ff, StreamFlag(0))
+            (bid_sflag as u64, ei_ptype_pid & 0x00ff_ffff, StreamFlag(0))
         };
 
         Ok(Self {
