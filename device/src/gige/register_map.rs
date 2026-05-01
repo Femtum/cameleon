@@ -717,14 +717,18 @@ mod tests {
 
     #[test]
     fn test_parse_file_url() {
-        let src = "file:test_xml.zip";
-        let loc = XmlFileLocation::parse(src).unwrap();
+        let expected_path = std::env::temp_dir().join("test_xml.zip");
+        let src = url::Url::from_file_path(&expected_path)
+            .unwrap()
+            .to_string();
+
+        let loc = XmlFileLocation::parse(&src).unwrap();
         match loc {
             XmlFileLocation::Host {
                 path,
                 compression_type,
             } => {
-                assert_eq!(path, std::path::Path::new("/test_xml.zip"));
+                assert_eq!(path, expected_path);
                 assert_eq!(compression_type, CompressionType::Zip);
             }
             _ => panic!(),
