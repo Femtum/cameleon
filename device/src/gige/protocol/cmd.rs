@@ -165,14 +165,14 @@ impl ReadReg {
     pub fn add_entry(&mut self, address: u32) -> Result<()> {
         const MAXIMUM_ENTRY_NUMBER: usize = 135;
         if self.addresses.len() >= MAXIMUM_ENTRY_NUMBER {
-            return Err(Error::InvalidPacket(
+            Err(Error::InvalidPacket(
                 format!(
                     "a number of entry of `ReadReg` must be smaller or equal than {}",
                     MAXIMUM_ENTRY_NUMBER
                 )
                 .into(),
-            ));
-        } else if address % 4 != 0 {
+            ))
+        } else if !address.is_multiple_of(4) {
             Err(Error::InvalidPacket(
                 "an address of `ReadReg` must be a multiple of 4".into(),
             ))
@@ -212,7 +212,7 @@ pub struct WriteRegEntry {
 
 impl WriteRegEntry {
     pub fn new(address: u32, data: [u8; 4]) -> Result<Self> {
-        if address % 4 == 0 {
+        if address.is_multiple_of(4) {
             Ok(Self { address, data })
         } else {
             Err(Error::InvalidPacket(
@@ -306,7 +306,7 @@ pub struct ReadMem {
 
 impl ReadMem {
     pub fn new(address: u32, length: u16) -> Result<Self> {
-        if address % 4 != 0 && length % 4 != 0 {
+        if !address.is_multiple_of(4) && !length.is_multiple_of(4) {
             Err(Error::InvalidPacket(
                 "address and length fields of `ReadMem` command must be a multiple of 4".into(),
             ))
@@ -359,7 +359,7 @@ pub struct WriteMem<'a> {
 impl<'a> WriteMem<'a> {
     pub fn new(address: u32, data: &'a [u8]) -> Result<Self> {
         const MAXIMUM_DATA_LEN: usize = 536;
-        if address % 4 != 0 {
+        if !address.is_multiple_of(4) {
             Err(Error::InvalidPacket(
                 "an address of `WriteMem` command must be a multiple of 4".into(),
             ))
@@ -371,7 +371,7 @@ impl<'a> WriteMem<'a> {
                 )
                 .into(),
             ))
-        } else if data.len() % 4 != 0 {
+        } else if !data.len().is_multiple_of(4) {
             Err(Error::InvalidPacket(
                 "a data length of `WriteMem` command must be a multiple of 4".into(),
             ))

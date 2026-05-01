@@ -390,7 +390,7 @@ impl ManifestHeader {
         self,
         device: &mut Ctrl,
     ) -> impl Iterator<Item = ControlResult<ManifestEntry>> + '_ {
-        (0..self.0.entry_num()).into_iter().map(move |id| {
+        (0..self.0.entry_num()).map(move |id| {
             let entry_reg = bootstrap::manifest_entry(id);
             let inner = register_map::ManifestEntry::from_raw(read_mem(device, entry_reg)?);
             Ok(ManifestEntry(inner))
