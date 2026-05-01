@@ -4,7 +4,7 @@
 
 use std::{
     borrow::Borrow,
-    io::Cursor,
+    io::{self, Cursor},
     net::{Ipv4Addr, UdpSocket},
     sync::{Arc, Condvar, Mutex},
     thread,
@@ -21,20 +21,35 @@ use crate::{
     DeviceControl, PayloadStream, StreamError, StreamResult,
 };
 
+pub trait StreamUdpSocket: Send + Sync + 'static {
+    fn recv(&self, buf: &mut [u8]) -> io::Result<usize>;
+    fn port(&self) -> u16;
+}
+
+impl StreamUdpSocket for UdpSocket {
+    fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
+        self.recv(buf)
+    }
+
+    fn port(&self) -> u16 {
+        self.local_addr().unwrap().port()
+    }
+}
+
 #[derive(Debug)]
 pub struct StreamParams {
     pub host_addr: Ipv4Addr,
     pub host_port: u16,
 }
 
-pub struct StreamHandle {
+pub struct StreamHandle<S: StreamUdpSocket = UdpSocket> {
     completion: Option<Arc<(Mutex<bool>, Condvar)>>,
     cancellation_tx: Option<oneshot::Sender<()>>,
-    sock: Arc<UdpSocket>,
+    sock: Arc<S>,
 }
 
-impl StreamHandle {
-    pub fn new(sock: UdpSocket) -> StreamResult<Self> {
+impl<S: StreamUdpSocket> StreamHandle<S> {
+    pub fn new(sock: S) -> StreamResult<Self> {
         Ok(Self {
             completion: None,
             cancellation_tx: None,
@@ -43,11 +58,11 @@ impl StreamHandle {
     }
 
     pub fn port(&self) -> u16 {
-        self.sock.local_addr().unwrap().port()
+        self.sock.port()
     }
 }
 
-impl PayloadStream for StreamHandle {
+impl<S: StreamUdpSocket> PayloadStream for StreamHandle<S> {
     fn open(&mut self) -> StreamResult<()> {
         // TODO:
         Ok(())
@@ -120,15 +135,15 @@ impl PayloadStream for StreamHandle {
     }
 }
 
-struct StreamingLoop {
+struct StreamingLoop<S: StreamUdpSocket> {
     buffer: Vec<u8>,
     cancellation_rx: oneshot::Receiver<()>,
     completion: Arc<(Mutex<bool>, Condvar)>,
-    sock: Arc<UdpSocket>,
+    sock: Arc<S>,
     sender: PayloadSender,
 }
 
-impl StreamingLoop {
+impl<S: StreamUdpSocket> StreamingLoop<S> {
     fn run(mut self) {
         macro_rules! unwrap_or_continue {
             ($expr:expr) => {
