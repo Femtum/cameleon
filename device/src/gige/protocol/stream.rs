@@ -133,7 +133,11 @@ impl PayloadType {
     }
 
     pub fn parse_generic_leader(cursor: &mut io::Cursor<&[u8]>) -> Result<Self> {
-        Self::parse(cursor)
+        let position_pre = cursor.position();
+        let _payload_type_specific: u16 = cursor.read_bytes_be()?;
+        let res = Self::parse(cursor);
+        cursor.set_position(position_pre);
+        res
     }
 }
 
@@ -241,5 +245,72 @@ impl ImageTrailer {
     pub fn parse(cursor: &mut io::Cursor<&[u8]>) -> Result<Self> {
         let actual_height = cursor.read_bytes_be()?;
         Ok(Self { actual_height })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PixelFormat;
+    use cameleon_impl::bytes_io::WriteBytes;
+
+    fn image_leader_bytes() -> Vec<u8> {
+        let mut buf = vec![];
+        // Field id (1) and field count (2).
+        buf.write_bytes_be(0x12_u8).unwrap();
+        // Reserved.
+        buf.write_bytes_be(0_u8).unwrap();
+        // Payload type, Image.
+        buf.write_bytes_be(0x0001_u16).unwrap();
+        // Time stamp.
+        buf.write_bytes_be(1_000_000_u64).unwrap();
+        // Pixel format.
+        buf.write_bytes_be::<u32>(PixelFormat::Mono8.into())
+            .unwrap();
+        // Width.
+        buf.write_bytes_be(640_u32).unwrap();
+        // Height.
+        buf.write_bytes_be(480_u32).unwrap();
+        // X offset.
+        buf.write_bytes_be(0_u32).unwrap();
+        // Y offset.
+        buf.write_bytes_be(0_u32).unwrap();
+        // X padding.
+        buf.write_bytes_be(0_u16).unwrap();
+        // Y padding.
+        buf.write_bytes_be(0_u16).unwrap();
+
+        buf
+    }
+
+    #[test]
+    fn test_parse_generic_leader() {
+        let buf = image_leader_bytes();
+        let mut cursor = io::Cursor::new(buf.as_slice());
+
+        let payload_type = PayloadType::parse_generic_leader(&mut cursor).unwrap();
+
+        assert_eq!(payload_type.kind(), PayloadTypeKind::Image);
+        assert_eq!(cursor.position(), 0);
+    }
+
+    #[test]
+    fn test_parse_image_leader() {
+        let buf = image_leader_bytes();
+        let mut cursor = io::Cursor::new(buf.as_slice());
+
+        let payload_type = PayloadType::parse_generic_leader(&mut cursor).unwrap();
+        assert_eq!(payload_type.kind(), PayloadTypeKind::Image);
+
+        let leader = ImageLeader::parse(&mut cursor).unwrap();
+        assert_eq!(leader.field_id(), 1);
+        assert_eq!(leader.field_count(), 2);
+        assert_eq!(leader.payload_type().kind(), PayloadTypeKind::Image);
+        assert_eq!(leader.timestamp(), time::Duration::from_nanos(1_000_000));
+        assert_eq!(leader.pixel_format(), PixelFormat::Mono8);
+        assert_eq!(leader.width(), 640);
+        assert_eq!(leader.height(), 480);
+        assert_eq!(leader.x_offset(), 0);
+        assert_eq!(leader.y_offset(), 0);
     }
 }
