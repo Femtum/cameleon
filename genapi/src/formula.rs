@@ -802,6 +802,7 @@ impl<'a> Lexer<'a> {
             return Some(peek);
         }
 
+        #[allow(clippy::question_mark)]
         let (peek, idx) = if self.peek_char_raw('&', 0)
             && self.peek_char_raw('a', 1)
             && self.peek_char_raw('m', 2)
