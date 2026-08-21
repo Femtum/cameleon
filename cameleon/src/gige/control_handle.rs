@@ -125,7 +125,7 @@ impl DeviceControl for ControlHandle {
     fn close(&mut self) -> ControlResult<()> {
         match (self.event_tx.take(), self.completion_rx.take()) {
             (Some(event_tx), Some(completion_rx)) => {
-                event_tx.try_send(HeartbeatEvent::ChannelClosed).unwrap();
+                event_tx.try_send(HeartbeatEvent::ChannelClosed).ok();
                 task::block_on(completion_rx).ok();
             }
             (None, None) => {}
@@ -185,6 +185,24 @@ impl DeviceControl for ControlHandle {
         unwrap_or_log!(assert_open(&mut *inner));
         unwrap_or_log!(inner.disable_streaming());
         Ok(())
+    }
+}
+
+impl Drop for ControlHandle {
+    fn drop(&mut self) {
+        // Dropping the sender is enough to stop the heartbeat loop, signalling it first only lets
+        // it exit through the regular path. Unlike `close`, we don't wait for its completion: the
+        // loop may be in the middle of a device transaction, and `drop` must not block on it.
+        if let Some(event_tx) = self.event_tx.take() {
+            event_tx.try_send(HeartbeatEvent::ChannelClosed).ok();
+        }
+
+        let mut inner = self.inner.lock().unwrap();
+        if inner.is_opened() {
+            if let Err(err) = inner.close() {
+                error!("failed to close control handle: {}", err);
+            }
+        }
     }
 }
 
@@ -626,8 +644,11 @@ impl HeartbeatLoop {
                         match event {
                             Ok(HeartbeatEvent::TimeoutChanged(timeout)) => self.timeout = timeout,
                             Ok(HeartbeatEvent::ChannelClosed) => break,
+                            // The sender is gone, so `ChannelClosed` can never arrive and `recv`
+                            // returns immediately: staying in the loop would spin.
                             Err(err) => {
                                 error!("failed to receive heartbeat event: {}", err);
+                                break;
                             }
                         }
                     }
@@ -639,8 +660,11 @@ impl HeartbeatLoop {
                 match event {
                     Ok(HeartbeatEvent::ChannelClosed) => break,
                     Ok(_) => {}
+                    // The sender is gone, so `ChannelClosed` can never arrive and `recv` returns
+                    // immediately: staying in the loop would spin.
                     Err(err) => {
                         error!("failed to receive heartbeat event: {}", err);
+                        break;
                     }
                 }
             }
@@ -673,4 +697,80 @@ fn assert_open<Ctrl: DeviceControl>(device: Ctrl) -> ControlResult<()> {
         .is_opened()
         .then_some(())
         .ok_or(ControlError::NotOpened)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::Ipv4Addr;
+
+    use cameleon_device::gige::register_map::{DeviceMode, NicCapability, NicConfiguration};
+
+    use super::*;
+
+    const EXIT_TIMEOUT: time::Duration = time::Duration::from_secs(5);
+
+    /// Long enough for the heartbeat arm of the `select!` to never fire while a test runs.
+    const IDLE_HEARTBEAT_TIMEOUT: time::Duration = time::Duration::from_secs(600);
+
+    fn device_info() -> DeviceInfo {
+        DeviceInfo {
+            gige_version: semver::Version::new(2, 0, 0),
+            device_mode: DeviceMode::from_raw(0),
+            mac_addr: [0; 6],
+            nic_capability: NicCapability::from_raw(0),
+            nic_configuration: NicConfiguration::from_raw(0),
+            ip: Ipv4Addr::LOCALHOST,
+            subnet_mask: [255, 255, 255, 0],
+            default_gateway: Ipv4Addr::LOCALHOST,
+            manufacturer_name: "test".into(),
+            model_name: "test".into(),
+            device_version: "test".into(),
+            manufacturer_specific_info: "test".into(),
+            serial_number: "test".into(),
+            user_defined_name: "test".into(),
+        }
+    }
+
+    /// The loop is built over a socket that is never used: only event handling is exercised.
+    fn heartbeat_loop(need_heartbeat: bool) -> (HeartbeatLoop, channel::Sender<HeartbeatEvent>) {
+        let stream_params = StreamParams {
+            host_addr: Ipv4Addr::LOCALHOST,
+            host_port: 0,
+        };
+        let inner = task::block_on(ControlHandleInner::new(&device_info(), stream_params)).unwrap();
+        let (event_tx, event_rx) = channel::unbounded();
+
+        (
+            HeartbeatLoop {
+                inner: Arc::new(Mutex::new(inner)),
+                timeout: IDLE_HEARTBEAT_TIMEOUT,
+                event_rx,
+                need_heartbeat,
+            },
+            event_tx,
+        )
+    }
+
+    fn assert_exits_when_sender_is_dropped(need_heartbeat: bool) {
+        let (heartbeat_loop, event_tx) = heartbeat_loop(need_heartbeat);
+        let (completion_tx, completion_rx) = oneshot::channel();
+        thread::spawn(|| task::block_on(heartbeat_loop.run(completion_tx)));
+
+        drop(event_tx);
+
+        assert!(
+            task::block_on(future::timeout(EXIT_TIMEOUT, completion_rx)).is_ok(),
+            "heartbeat loop is still running after the event sender was dropped"
+        );
+    }
+
+    #[test]
+    fn test_heartbeat_loop_exits_when_sender_is_dropped() {
+        assert_exits_when_sender_is_dropped(false);
+    }
+
+    #[test]
+    fn test_heartbeat_loop_exits_when_sender_is_dropped_while_beating() {
+        assert_exits_when_sender_is_dropped(true);
+    }
 }
