@@ -3,13 +3,17 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use super::{
-    elem_type::{ImmOrPNode, IntegerRepresentation, ValueKind},
+    elem_type::{ImmOrPNode, IntegerRepresentation, PValue, ValueKind},
     interface::{IInteger, INode, ISelector, IncrementMode},
     ivalue::IValue,
     node_base::{NodeAttributeBase, NodeBase, NodeElementBase},
     store::{CacheStore, IntegerId, NodeId, NodeStore, ValueStore},
-    Device, GenApiResult, ValueCtxt,
+    Device, GenApiError, GenApiResult, ValueCtxt,
 };
+
+/// The increment GenApi gives a node that declares none, and the one a node keeps when the
+/// node it delegates to has no notion of an increment.
+const DEFAULT_INCREMENT: i64 = 1;
 
 #[derive(Debug, Clone)]
 pub struct IntegerNode {
@@ -18,9 +22,9 @@ pub struct IntegerNode {
 
     pub(crate) streamable: bool,
     pub(crate) value_kind: ValueKind<IntegerId>,
-    pub(crate) min: ImmOrPNode<IntegerId>,
-    pub(crate) max: ImmOrPNode<IntegerId>,
-    pub(crate) inc: ImmOrPNode<i64>,
+    pub(crate) min: Option<ImmOrPNode<IntegerId>>,
+    pub(crate) max: Option<ImmOrPNode<IntegerId>>,
+    pub(crate) inc: Option<ImmOrPNode<i64>>,
     pub(crate) unit: Option<String>,
     pub(crate) representation: IntegerRepresentation,
     pub(crate) p_selected: Vec<NodeId>,
@@ -33,18 +37,62 @@ impl IntegerNode {
     }
 
     #[must_use]
-    pub fn min_elem(&self) -> ImmOrPNode<IntegerId> {
+    pub fn min_elem(&self) -> Option<ImmOrPNode<IntegerId>> {
         self.min
     }
 
     #[must_use]
-    pub fn max_elem(&self) -> ImmOrPNode<IntegerId> {
+    pub fn max_elem(&self) -> Option<ImmOrPNode<IntegerId>> {
         self.max
     }
 
     #[must_use]
-    pub fn inc_elem(&self) -> ImmOrPNode<i64> {
+    pub fn inc_elem(&self) -> Option<ImmOrPNode<i64>> {
         self.inc
+    }
+
+    fn p_value(&self) -> Option<NodeId> {
+        self.value_kind.p_value().map(PValue::p_value)
+    }
+
+    /// The limit GenApi propagates to a node that declares none of its own: the one of the node
+    /// it delegates its value to, and the range its representation implies when it delegates to
+    /// nothing. Basler leaves `GevSCPSPacketSize` bare and states its real range on the private
+    /// node behind `pValue`, so a node read in isolation reports no limit the camera set.
+    fn inherited_min<T: ValueStore, U: CacheStore>(
+        &self,
+        device: &mut impl Device,
+        store: &impl NodeStore,
+        cx: &mut ValueCtxt<T, U>,
+    ) -> GenApiResult<i64> {
+        match self.p_value().and_then(|nid| nid.as_iinteger_kind(store)) {
+            Some(node) => node.min(device, store, cx),
+            None => Ok(self.representation.deduce_min()),
+        }
+    }
+
+    fn inherited_max<T: ValueStore, U: CacheStore>(
+        &self,
+        device: &mut impl Device,
+        store: &impl NodeStore,
+        cx: &mut ValueCtxt<T, U>,
+    ) -> GenApiResult<i64> {
+        match self.p_value().and_then(|nid| nid.as_iinteger_kind(store)) {
+            Some(node) => node.max(device, store, cx),
+            None => Ok(self.representation.deduce_max()),
+        }
+    }
+
+    fn inherited_inc<T: ValueStore, U: CacheStore>(
+        &self,
+        device: &mut impl Device,
+        store: &impl NodeStore,
+        cx: &mut ValueCtxt<T, U>,
+    ) -> GenApiResult<Option<i64>> {
+        match self.p_value().and_then(|nid| nid.as_iinteger_kind(store)) {
+            Some(node) => node.inc(device, store, cx),
+            None => Ok(None),
+        }
     }
 
     #[must_use]
@@ -109,7 +157,10 @@ impl IInteger for IntegerNode {
         store: &impl NodeStore,
         cx: &mut ValueCtxt<T, U>,
     ) -> GenApiResult<i64> {
-        self.min.value(device, store, cx)
+        match self.min {
+            Some(min) => min.value(device, store, cx),
+            None => self.inherited_min(device, store, cx),
+        }
     }
 
     #[tracing::instrument(skip(self, device, store, cx),
@@ -121,7 +172,10 @@ impl IInteger for IntegerNode {
         store: &impl NodeStore,
         cx: &mut ValueCtxt<T, U>,
     ) -> GenApiResult<i64> {
-        self.max.value(device, store, cx)
+        match self.max {
+            Some(max) => max.value(device, store, cx),
+            None => self.inherited_max(device, store, cx),
+        }
     }
 
     fn inc_mode(&self, _: &impl NodeStore) -> Option<IncrementMode> {
@@ -137,7 +191,12 @@ impl IInteger for IntegerNode {
         store: &impl NodeStore,
         cx: &mut ValueCtxt<T, U>,
     ) -> GenApiResult<Option<i64>> {
-        Some(self.inc.value(device, store, cx)).transpose()
+        let inc = match self.inc {
+            Some(inc) => Some(inc.value(device, store, cx)?),
+            None => self.inherited_inc(device, store, cx)?,
+        };
+
+        Ok(Some(inc.unwrap_or(DEFAULT_INCREMENT)))
     }
 
     fn valid_value_set(&self, _: &impl NodeStore) -> &[i64] {
@@ -162,7 +221,10 @@ impl IInteger for IntegerNode {
         store: &impl NodeStore,
         cx: &mut ValueCtxt<T, U>,
     ) -> GenApiResult<()> {
-        self.min.set_value(value, device, store, cx)
+        match self.min {
+            Some(min) => min.set_value(value, device, store, cx),
+            None => Err(GenApiError::not_writable()),
+        }
     }
 
     #[tracing::instrument(skip(self, device, store, cx),
@@ -175,7 +237,10 @@ impl IInteger for IntegerNode {
         store: &impl NodeStore,
         cx: &mut ValueCtxt<T, U>,
     ) -> GenApiResult<()> {
-        self.max.set_value(value, device, store, cx)
+        match self.max {
+            Some(max) => max.set_value(value, device, store, cx),
+            None => Err(GenApiError::not_writable()),
+        }
     }
 
     #[tracing::instrument(skip(self, device, store, cx),
