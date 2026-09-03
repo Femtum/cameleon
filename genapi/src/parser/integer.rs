@@ -6,7 +6,7 @@ use tracing::debug;
 
 use crate::{
     builder::{CacheStoreBuilder, NodeStoreBuilder, ValueStoreBuilder},
-    elem_type::{ImmOrPNode, IntegerRepresentation},
+    elem_type::IntegerRepresentation,
     store::NodeId,
     IntegerNode,
 };
@@ -44,24 +44,13 @@ impl Parse for IntegerNode {
             .or_else(|| node.parse_if(P_MAX, node_builder, value_builder, cache_builder));
         let inc = node
             .parse_if(INC, node_builder, value_builder, cache_builder)
-            .or_else(|| node.parse_if(P_INC, node_builder, value_builder, cache_builder))
-            .unwrap_or(ImmOrPNode::Imm(1));
+            .or_else(|| node.parse_if(P_INC, node_builder, value_builder, cache_builder));
         let unit = node.parse_if(UNIT, node_builder, value_builder, cache_builder);
         let representation: IntegerRepresentation = node
             .parse_if(REPRESENTATION, node_builder, value_builder, cache_builder)
             .unwrap_or_default();
         let p_selected: Vec<NodeId> =
             node.parse_while(P_SELECTED, node_builder, value_builder, cache_builder);
-
-        // Deduce min and max value based on representation if not specified.
-        let min = min.unwrap_or_else(|| {
-            let id = value_builder.store(representation.deduce_min());
-            ImmOrPNode::Imm(id)
-        });
-        let max = max.unwrap_or_else(|| {
-            let id = value_builder.store(representation.deduce_max());
-            ImmOrPNode::Imm(id)
-        });
 
         Self {
             attr_base,
@@ -80,7 +69,11 @@ impl Parse for IntegerNode {
 
 #[cfg(test)]
 mod tests {
-    use crate::{elem_type::ValueKind, interface::INode, store::ValueStore};
+    use crate::{
+        elem_type::{ImmOrPNode, ValueKind},
+        interface::INode,
+        store::ValueStore,
+    };
 
     use super::{super::utils::tests::parse_default, *};
 
@@ -109,14 +102,14 @@ mod tests {
             .unwrap();
         assert_eq!(value, 0x100);
         let min = value_builder
-            .integer_value(node.min_elem().imm().unwrap())
+            .integer_value(node.min_elem().unwrap().imm().unwrap())
             .unwrap();
         assert_eq!(min, 0x10);
         let max = value_builder
-            .integer_value(node.max_elem().imm().unwrap())
+            .integer_value(node.max_elem().unwrap().imm().unwrap())
             .unwrap();
         assert_eq!(max, 100);
-        assert_eq!(node.inc_elem(), ImmOrPNode::Imm(0x5));
+        assert_eq!(node.inc_elem(), Some(ImmOrPNode::Imm(0x5)));
         assert_eq!(node.unit_elem(), Some("dB"));
         assert_eq!(
             node.representation_elem(),
@@ -157,16 +150,31 @@ mod tests {
 
         assert_eq!(
             node.min_elem(),
-            ImmOrPNode::PNode(node_builder.get_or_intern("pMinNode"))
+            Some(ImmOrPNode::PNode(node_builder.get_or_intern("pMinNode")))
         );
         assert_eq!(
             node.max_elem(),
-            ImmOrPNode::PNode(node_builder.get_or_intern("pMaxNode"))
+            Some(ImmOrPNode::PNode(node_builder.get_or_intern("pMaxNode")))
         );
         assert_eq!(
             node.inc_elem(),
-            ImmOrPNode::PNode(node_builder.get_or_intern("pIncNode"))
+            Some(ImmOrPNode::PNode(node_builder.get_or_intern("pIncNode")))
         );
+    }
+
+    #[test]
+    fn test_integer_node_without_limits_keeps_them_unset_for_the_p_value_node_to_supply() {
+        let xml = r#"
+            <Integer Name = "TestNode">
+                <pValue>pValueNode</pValue>
+            </Integer>
+            "#;
+
+        let (node, ..): (IntegerNode, _, _, _) = parse_default(xml);
+
+        assert_eq!(node.min_elem(), None);
+        assert_eq!(node.max_elem(), None);
+        assert_eq!(node.inc_elem(), None);
     }
 
     #[test]
